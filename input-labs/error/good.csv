@@ -1,0 +1,5 @@
+id,laboratorio_id,paciente_id,tipo_examen,resultado,fecha_examen
+1,LAB001,P12345,GLUCOSA,105.5,2025-04-23
+2,LAB001,P67890,COLESTEROL,198.2,2025-04-23
+3,LAB002,P11223,HEMOGLOBINA,14.1,2025-04-22
+

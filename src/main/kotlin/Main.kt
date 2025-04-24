@@ -1,71 +1,50 @@
 package com.mendoza
 
-import org.apache.camel.Exchange
-import org.apache.camel.LoggingLevel
-import org.apache.camel.builder.RouteBuilder
 import org.apache.camel.main.Main
+import org.slf4j.LoggerFactory
+import org.sqlite.SQLiteDataSource
 
-
-class FileReadingRoute : RouteBuilder() {
-
-    fun getFileType(exchange: Exchange): FileType? {
-        val fileName = exchange.getIn()
-            ?.getHeader("CamelFileName", String::class.java)
-        return when {
-            fileName?.endsWith(".csv", ignoreCase = true) == true -> FileType.CSV
-            else -> null
-        }
-    }
-
-    fun processCsvFile(exchange: Exchange): Result<Boolean> {
-        val bodyStr = exchange.getIn().getBody(String::class.java)
-        val lines = bodyStr.lines().filter { it.isNotBlank() }
-        if (lines.isNotEmpty()) {
-            val headerLine = lines.first()
-            headerLine.split(",").map { it.trim() }.forEach {
-                if (!columns.contains(it))
-                    return Result.failure(IllegalArgumentException("Invalid column name: $it"))
-            }
-        } else println("CSV file is empty")
-
-        return Result.success(true)
-
-    }
-
-    override fun configure() {
-        onException(IllegalArgumentException::class.java)
-            .maximumRedeliveries(0)
-            .handled(true)
-            .log( LoggingLevel.ERROR,  "${'$'}{exception.message}" )
-        from("file:files/input?noop=true").convertBodyTo(String::class.java)
-            .process { exchange -> exchange.getIn().setHeader("fileType", getFileType(exchange)) }
-            .process { exchange ->
-                val fileType: FileType? = exchange.getIn().getHeader("fileType", FileType::class.java)
-                when (fileType) {
-                    FileType.CSV -> {
-                        processCsvFile(exchange)
-                            .onFailure { throw(IllegalArgumentException("Error processing CSV file: ${it.message}")) }
-                    }
-
-                    null -> println("File type not supported")
-                }
-            }
-            .to("file:files/output?fileExist=Override").apply {
-                log(LoggingLevel.INFO, "File processed successfully: ${'$'}{header.CamelFileName}")
-            }
-    }
-}
-
+class ValidationException(message: String) : Exception(message)
 
 fun main() {
+    val log = LoggerFactory.getLogger("com.mendoza.MainKt") // Logger for main
     val main = Main()
-    main.configure().addRoutesBuilder(FileReadingRoute())
-    main.run()
-}
 
-val columns = listOf("date", "client", "product", "price", "quantity")
+    // --- Database Setup ---
+    val dbFile = "bionet_data.db"
+    val dataSource = SQLiteDataSource()
+    dataSource.url = "jdbc:sqlite:$dbFile"
+    log.info("Using database file: {}", dbFile) // Use logger
 
+    main.bind("sqliteDataSource", dataSource)
 
-enum class FileType {
-    CSV
+    try {
+        DatabaseInitializer.createTables(dataSource)
+    } catch (e: RuntimeException) {
+        log.error("ERROR: Could not initialize database schema. Exiting.", e) // Use logger
+        return
+    }
+
+    // --- Camel Setup ---
+    log.info("Configuring Camel routes...") // Use logger
+    // Add routes using a cleaner approach
+    main.configure().apply {
+        addRoutesBuilder(FileTransferRoute())
+        addRoutesBuilder(DatabaseInsertRoute())
+    }
+
+    try {
+        log.info("Starting Camel context and waiting...")
+        main.start()
+        main.run() //
+        log.info("Camel application finished.") // Use logger
+
+    } catch (e: Exception) {
+        log.error("An error occurred during Camel execution:", e) // Use logger
+    } finally {
+        if (main.isStarted && !main.isStopped) {
+            log.info("Stopping Camel context.")
+            main.stop()
+        }
+    }
 }
